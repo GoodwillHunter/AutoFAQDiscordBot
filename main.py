@@ -18,6 +18,8 @@ import datetime
 from replit import db
 import sys
 import subprocess
+from dateutil.parser import parse
+import heapq
 try:
   from Levenshtein import ratio
 except:
@@ -48,10 +50,12 @@ Important Links:
 question_words = set(["anyone", 'tell','can','what','where','when','how','which','who','why','suggest'])
 # TODO: make utility functions for question_words
 
-#TDOD: Make created_at channel wise and add to db
-created_at = None
+
 threshold = 0.5
-# TODO: Make utility functions for threshold
+#TODO: make last_answer channel independent
+last_answer = None
+
+# Do RBAC for commands
 
 def isQuestion(msg):
   # Detect if the msg is a question or not
@@ -75,10 +79,15 @@ async def getChatHistory(channel):
   # https://discordpy.readthedocs.io/en/stable/api.html#discord.TextChannel.history
   # print("getChatHistory called")
   temp = []
-  global created_at
-  async for message in channel.history(limit=None, after=created_at):
-    temp.append(message)
-  created_at = datetime.datetime.now()
+  if str(channel.id) not in db['created_at']:
+    db['created_at'][str(channel.id)] = None
+  if(db['created_at'][str(channel.id)] == None):
+    async for message in channel.history(limit=None):
+      temp.append(message)
+  else:
+    async for message in channel.history(limit=None, after=parse(db['created_at'][str(channel.id)])):
+      temp.append(message)
+  db['created_at'][str(channel.id)] = str(datetime.datetime.now())
   arr = []
   n = len(temp)
   m = n-1
@@ -88,21 +97,32 @@ async def getChatHistory(channel):
 
   return arr;
 
+
 def add(question, answer):
-  # TODO: Divide the question sentence wise and only add question part.
-  channel = str(question.channel)
+  channel = str(question.channel.id)
   if(channel not in db):
     db[channel] = {}
   # adds question-answer pair into the database
-  print("Q. "+question.content)
-  print("A. "+answer.content)
-  max_score = 0
-  for ques2 in db[channel]:
-    match = ratio(ques2, question.content)
-    if(match>max_score):
-      max_score = match
-  if(max_score < threshold):
-    db[channel][question.content.lower()] = answer.content
+  ques = question.content
+  ques = ques.replace('?', '.')
+  ques = ques.replace('!', '.')
+  ques = ques.replace(';', '.')
+  ques = ques.split(".")
+  q = ""
+  for x in ques:
+    if(isQuestion(x)):
+      q += x
+      q += " "
+  print(q)
+  #print("A. "+answer.content)
+
+  # max_score = 0
+  # for ques2 in db[channel]:
+  #   match = ratio(ques2, question.content)
+  #   if(match>max_score):
+  #     max_score = match
+  # if(max_score < threshold):
+  db[channel][q.lower()] = answer.content
 
 async def generateFAQ(channel):
   # used self.last_generated- datetime
@@ -110,7 +130,7 @@ async def generateFAQ(channel):
   # iterates through chat history and find question-answer pairs
   # put them in a database
   # print("generateFAQ called")
-  channel1 = str(channel)
+  channel1 = str(channel.id)
   unanswered_questions = {}
   if(channel1 not in db):
     db[channel1] = {}
@@ -153,7 +173,10 @@ def generateFAQfromExisting(faq):
 async def answer(ques):
   # find the matching question and confidence
   # if confidence > threshold, writes answer on the text channel
-  channel = str(ques.channel)
+  # Phase 2: Get more than one related QA
+  global last_answer 
+  last_answer = ques
+  channel = str(ques.channel.id)
   max_score = 0
   answer = ""
   prediction = ""
@@ -164,10 +187,28 @@ async def answer(ques):
       answer = db[channel][ques2]
       prediction = ques2
   if(max_score >= threshold):
-    await ques.channel.send("Hey, your friendly FAQ Bot here. Here is a related question asked befor: "+prediction)
-    await ques.channel.send("Here is the answer: "+answer)
+    await ques.channel.send("Related question: "+prediction)
+    await ques.channel.send("Answer: "+answer)
+    await last_answer.channel.send("To get more related QA, type '$more n', replace n with #questions")
+
+
+async def answer_more(n=3):
+  global last_answer
+  if(last_answer==None):
+    return
+  channel1 = str(last_answer.channel.id)
+  l1 = []
+  for ques2 in db[channel1]:
+    heapq.heappush(l1, (ratio(ques2, last_answer.content), ques2))
+  l2 = heapq.nlargest(n+1, l1)
+  l2.pop(0)
+  for x in l2:
+    await last_answer.channel.send("Related question: "+x[1])
+    await last_answer.channel.send("Answer: "+db[channel1][x[1]])
+    
 
 def feedback(feedback):
+  # Phase 2
   # handles feedback for answer output
   # adjusts score accordingly
   # TODO
@@ -186,33 +227,104 @@ def maintainDB():
   # sorts based on importance
   pass
 
+async def threshold_utility(msg, channel):
+  global threshold
+  if(msg[2]=="get"):
+    await channel.send("threshold: "+str(threshold))
+  if(msg[2]=="set"):
+    temp = int(msg[3])
+    if(temp>=0 and temp<=1):
+      threshold = temp
+    else:
+      await channel.send("please send a valid value between 0 and 1")
+async def database_utility(msg, channel):
+  if(msg[2]=="show"):
+    x = db[str(channel.id)]
+    for q in x:
+      await channel.send("Q. "+str(q))
+      await channel.send("A. "+str(x[q]))
+  if(msg[2]=="showall"):
+      keys = db.keys()
+      for x in keys:
+        await channel.send("Channel: "+str(x))
+        for q in db[x]:
+          await channel.send("Q. "+str(q))
+          #await channel.send("A. "+str(x[q]))
+async def created_at_utility(msg, channel):
+  if(msg[2]=="get"):
+    await channel.send(db['created_at'][str(channel.id)])
+  if(msg[2]=="set"):
+    db['created_at'][str(channel.id)] = str(parse(msg[3]))
+
+async def admin_utility(message):
+  msg = message.content.split()
+  channel = message.channel
+  # format -> [$admin area task param1 param2...]
+  if(msg[1]=="db"):
+    await database_utility(msg, channel)
+  elif(msg[1]=="threshold"):
+    await threshold_utility(msg, channel)
+  elif(msg[1]=="created_at"):
+    await created_at_utility(msg, channel)
+
+    
+
 @client.event
 async def on_ready():
   print('We have logged in as {0.user}'.format(client))
 
 @client.event
 async def on_message(message):
-  # if created_at + 24 hrs > datetime.now
-  #   await generateFAQ(message.channel)
-  global created_at
-  # if(created_at==None or created_at+datetime.timedelta(hours=24)<datetime.datetime.now()):
-  #   await generateFAQ(message.channel)
+  # print(type(message))
+  
+  
   if message.author == client.user:
     return
 
   msg = message.content
 
+  channel1 = str(message.channel.id)
+  if("created_at" not in db):
+    db["created_at"] = {}
+    print("created_at not in db")
+  
+  if channel1 not in db['created_at']:
+    print("channel1 not in db['created_at']")
+    await generateFAQ(message.channel)
+    print("FAQ refresh succesfull")
+  if db['created_at'][channel1]==None:
+    print("db['created_at'][channel1]==None")
+    await generateFAQ(message.channel)
+    print("FAQ refresh succesfull")
+  if parse(db['created_at'][channel1])+datetime.timedelta(hours=24)<datetime.datetime.now():
+    print("time expired")
+    await generateFAQ(message.channel)
+    print("FAQ refresh succesfull")
+  
+  
   if(isQuestion(msg)):
     await answer(message)
+  
+  if msg.startswith('$admin'):
+    await admin_utility(message)
+  
+  if msg.startswith('$more'):
+    temp = msg.split()
+    n = 3
+    if(len(temp)>1):
+      n = int(temp[1])
+    await answer_more(n)
 
   if msg.startswith('$generateFAQ'):
     # print("command recieved")
-    channel1 = str(message.channel)
+    
     if(channel1 in db):
       db.pop(channel1)
-    created_at = None
+    db['created_at'][str(message.channel.id)] = None
     await generateFAQ(message.channel)
     print("FAQ reset successfull")
     await message.channel.send("FAQ reset successfull")
 
 client.run(os.environ['TOKEN'])
+
+# phase 3: Add super-admin commands that can export QA from all channels into a csv which will be used as test data for future algorithms
