@@ -6,8 +6,8 @@ The FAQ is managed automatically so its up-to-date as time passes eliminating th
 Salient Features include
   * Automatic and up-to-date FAQ database.
   * Effective immediately after setup and gets better overtime xD.
-  * Can initialsize with existing FAQ set.
-  * Incorporates feedback for induvisual question-answer pairs.
+  * You can use a private database too.
+  * Can get as many related QA as you want.
   * Users can choose to not recieve answers for their questions (Older members might prefer to do so).
 """
 
@@ -55,6 +55,9 @@ question_words = set(["anyone", 'tell','can','what','where','when','how','which'
 threshold = 0.5
 #TODO: make last_answer channel independent
 last_answer = None
+
+bot_switch_off = False
+bot_switch_user = {}
 
 # Do RBAC for commands
 
@@ -277,6 +280,21 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+  global bot_switch_off
+  global bot_switch_user
+  if(message.content.startswith("$switchall on")):
+    bot_switch_off = False
+  elif(message.content.startswith("$switchall off")):
+    bot_switch_off = True
+  elif(message.content.startswith("$switch on")):
+    if(str(message.author.id) in bot_switch_user):
+      bot_switch_user.pop(str(message.author.id))
+  elif(message.content.startswith("$switch off")):
+    if(str(message.author.id) not in bot_switch_user):
+      bot_switch_user[str(message.author.id)] = "OFF"
+  if(bot_switch_off or str(message.author.id) in bot_switch_user):
+    return
+  
   global db
   from replit import db
   if("private_db" not in db):
@@ -342,6 +360,7 @@ async def on_message(message):
     await generateFAQ(message.channel)
     print("FAQ reset successfull")
     await message.channel.send("FAQ reset successfull")
+
 client.run(os.environ['TOKEN'])
 
 # phase 3: Add super-admin commands that can export QA from all channels into a csv which will be used as test data for future algorithms
