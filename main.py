@@ -16,6 +16,7 @@ import discord
 import os
 import datetime
 from replit import db
+import replit
 import sys
 import subprocess
 from dateutil.parser import parse
@@ -88,6 +89,7 @@ async def getChatHistory(channel):
     async for message in channel.history(limit=None, after=parse(db['created_at'][str(channel.id)])):
       temp.append(message)
   db['created_at'][str(channel.id)] = str(datetime.datetime.now())
+  print("REAL TIME SET")
   arr = []
   n = len(temp)
   m = n-1
@@ -275,12 +277,25 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+  global db
+  from replit import db
+  if("private_db" not in db):
+    db["private_db"] = {}
+  if(message.content.startswith("$admin private_db reset")):
+    if(str(message.channel.id) in db["private_db"]):
+      db["private_db"].pop(str(message.channel.id))
+  elif(message.content.startswith("$admin private_db set")):
+    url = message.content.split()[3]
+    db["private_db"][str(message.channel.id)] = url
   # print(type(message))
   
-  
+  if(str(message.channel.id) in db["private_db"]):
+    db = replit.database.Database(db["private_db"][str(message.channel.id)])
+
   if message.author == client.user:
     return
 
+  # print(db.keys())
   msg = message.content
 
   channel1 = str(message.channel.id)
@@ -292,10 +307,13 @@ async def on_message(message):
     print("channel1 not in db['created_at']")
     await generateFAQ(message.channel)
     print("FAQ refresh succesfull")
-  if db['created_at'][channel1]==None:
-    print("db['created_at'][channel1]==None")
+  if(channel1 not in db['created_at']):
+    db['created_at'][channel1] = str(datetime.datetime(2000, 1, 1))
+    print("PROXY TIME SET")
+    print("channel1 not in db['created_at']")
     await generateFAQ(message.channel)
     print("FAQ refresh succesfull")
+  # print(db['created_at'])
   if parse(db['created_at'][channel1])+datetime.timedelta(hours=24)<datetime.datetime.now():
     print("time expired")
     await generateFAQ(message.channel)
@@ -320,11 +338,10 @@ async def on_message(message):
     
     if(channel1 in db):
       db.pop(channel1)
-    db['created_at'][str(message.channel.id)] = None
+    db['created_at'].pop(str(message.channel.id))
     await generateFAQ(message.channel)
     print("FAQ reset successfull")
     await message.channel.send("FAQ reset successfull")
-
 client.run(os.environ['TOKEN'])
 
 # phase 3: Add super-admin commands that can export QA from all channels into a csv which will be used as test data for future algorithms
